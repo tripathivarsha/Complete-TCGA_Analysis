@@ -1,0 +1,144 @@
+########### “Complete workflow of Extract all TCGA dataset through R”############
+library(TCGAWorkflowData)
+library(DT)
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(caret)
+
+query.exp.lusc <- GDCquery(
+  project = "TCGA-LUSC",
+  legacy = TRUE,
+  data.category = "Gene expression",
+  data.type = "Gene expression quantification",
+  platform = "Illumina HiSeq",
+  file.type = "results",
+  sample.type = "Primary Tumor"
+)
+GDCdownload(query.exp.lusc)
+exp.lusc <- GDCprepare(query = query.exp.lusc, save = TRUE, save.filename = "luscExp.rda")
+
+#-----------------------------------------------------------------------------
+#                   Data.category: Copy number variation aligned to hg38
+#-----------------------------------------------------------------------------
+query.cnv <- GDCquery(
+  project = "TCGA-LUSC",
+  data.category = "Copy Number Variation",
+  data.type = "Copy Number Segment"
+)
+GDCdownload(query.cnv)
+data <- GDCprepare(query.cnv)
+
+library(SummarizedExperiment)
+
+# get expression matrix
+data <- assay(exp.lusc)
+datatable(
+  data = data[1:10,],
+  options = list(scrollX = TRUE, keys = TRUE, pageLength = 5),
+  rownames = TRUE
+)
+# get genes information
+genes.info <- rowRanges(exp.lusc)
+genes.info
+### get sample information####
+sample.info <- colData(exp.lusc)
+datatable(
+  data = as.data.frame(sample.info),
+  options = list(scrollX = TRUE, keys = TRUE, pageLength = 5),
+  rownames = FALSE
+)
+
+#### get indexed clinical patient data for LUSC samples#####
+lusc_clin <- GDCquery_clinic(project = "TCGA-LUSC", type = "Clinical")
+
+#### Bind the results, as the columns might not be the same###,
+
+clinical <- lusc_clin
+datatable(clinical[1:10,], options = list(scrollX = TRUE, keys = TRUE), rownames = FALSE)
+# Fetch clinical data directly from the clinical XML files.
+# if barcode is not set, it will consider all samples.
+# We only set it to make the example faster
+query.clinical <- GDCquery(
+  project = "TCGA-LUSC",
+  file.type = "xml",
+  data.category = "Clinical",
+)
+GDCdownload(query.clinical)
+clinical <- GDCprepare_clinic(query.clinical, clinical.info = "patient")
+datatable(clinical, options = list(scrollX = TRUE, keys = TRUE), rownames = FALSE)
+clinical.drug <- GDCprepare_clinic(query.clinical, clinical.info = "drug")
+datatable(clinical.drug, options = list(scrollX = TRUE, keys = TRUE), rownames = FALSE)
+clinical.radiation <- GDCprepare_clinic(query.clinical, clinical.info = "radiation")
+datatable(clinical.radiation, options = list(scrollX = TRUE,  keys = TRUE), rownames = FALSE)
+clinical.admin <- GDCprepare_clinic(query.clinical, clinical.info = "admin")
+datatable(clinical.admin, options = list(scrollX = TRUE, keys = TRUE), rownames = FALSE)
+library(TCGAbiolinks)
+
+# Select common CN technology available for LUSC
+#############################
+## CNV data pre-processing ##
+#############################
+query.lusc.nocnv <- GDCquery(
+  project = "TCGA-LUSC",
+  data.category = "Copy number variation",
+  legacy = TRUE,
+  file.type = "nocnv_hg19.seg",
+  sample.type = c("Primary Tumor")
+)
+# to reduce time we will select only 20 samples
+query.lusc.nocnv$results[[1]] <- query.lusc.nocnv$results[[1]][1:20,]
+GDCdownload(query.lusc.nocnv, files.per.chunk = 100)
+lusc.nocnv <- GDCprepare(query.lusc.nocnv, save = TRUE, save.filename = "LUSCnocnvhg19.rda")
+
+#### Create object to use in maftools####
+library(maftools)
+# Create object to use in maftools
+#path to TCGA LUSC MAF file
+lusc.maf = system.file('extdata', 'tcga_lusc.maf.gz', package = 'maftools')
+#clinical information containing survival information and histology. This is optional
+lusc.clin = system.file('extdata', 'tcga_lusc_annot.tsv', package = 'maftools')
+
+lusc = read.maf(maf = lusc.maf, clinicalData = lusc.clin)
+plotmafSummary(
+  maf = lusc,
+  rmOutlier = TRUE,
+  addStat = 'median',
+  dashboard = TRUE
+)
+oncoplot(
+  maf = lusc,
+  top = 20,
+  legendFontSize = 8,
+  clinicalFeatures = c("Overall_Survival_Status")
+  isTCGA = TRUE
+)
+
+###### get DNA methylation data, RNAseq2 and clinical data for LUSC####
+lusc.data <- getFirehoseData(
+  dataset = "LUSC",
+  runDate = lastRunDate,
+  gistic2Date = getFirehoseAnalyzeDates(1),
+  Methylation = FALSE,  
+  clinical = TRUE,
+  RNASeq2GeneNorm  = FALSE,
+  Mutation = TRUE,
+  fileSizeLimit = 10000
+)
+lusc.mut <- getData(lusc.data,"Mutation")
+lusc.clin <- getData(lusc.data,"clinical")
+
+##### Download GISTIC results####
+lastanalyzedate <- getFirehoseAnalyzeDates(1)
+gistic <- getFirehoseData("LUSC",GISTIC = TRUE, gistic2Date = lastanalyzedate)
+
+#### get GISTIC results####
+
+gistic.allbygene <- getData(gistic, type = "GISTIC", platform = "AllByGene")
+gistic.thresholedbygene <- getData(gistic, type = "GISTIC", platform = "ThresholdedByGene")
+
+data(LUSCGistic)
+gistic.allbygene %>% head() %>% gt::gt()
+
+gistic.thresholedbygene %>% head() %>% gt::gt()
+
+
